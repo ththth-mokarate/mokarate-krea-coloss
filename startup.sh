@@ -145,13 +145,20 @@ mark DISK_OK "free=$FREE"
 if [ ! -f "$PHASE/PHASE1_DONE" ]; then
   ISZ=$(size_of "$INT8")
   if [ "$ISZ" -lt "$INT8_LO" ] || [ "$ISZ" -gt "$INT8_HI" ]; then
-    if [ -z "${COLOSS_BF16_URL:-}" ]; then
-      fail "COLOSS_BF16_URL env var is empty"
+    # The signed URL is only needed if the bf16 actually has to be
+    # (re)downloaded. A container restart with the bf16 already on disk
+    # must be able to convert without it (restart resilience).
+    if [ "$(size_of "$BF16")" != "$BF16_SIZE" ]; then
+      if [ -z "${COLOSS_BF16_URL:-}" ]; then
+        fail "COLOSS_BF16_URL env var is empty and bf16 is not on disk"
+      fi
+      mark DL_BF16_START "want=$BF16_SIZE"
+      download "$COLOSS_BF16_URL" "$BF16" "$BF16_SIZE" \
+        || fail "bf16 download failed (rc=$?)"
+      mark DL_BF16_END "bytes=$(size_of "$BF16")"
+    else
+      echo "bf16 already on disk ($(size_of "$BF16") bytes) - no download needed"
     fi
-    mark DL_BF16_START "want=$BF16_SIZE"
-    download "$COLOSS_BF16_URL" "$BF16" "$BF16_SIZE" \
-      || fail "bf16 download failed (rc=$?)"
-    mark DL_BF16_END "bytes=$(size_of "$BF16")"
     mark CONV_START
     rm -f "$INT8"
     CTQ_START=$(date +%s)
