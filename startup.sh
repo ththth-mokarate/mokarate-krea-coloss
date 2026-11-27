@@ -204,9 +204,11 @@ if [ ! -f "$PHASE/PHASE1_DONE" ]; then
   # Hold the file server up until the driver has preserved the int8
   # file and signals via GET /release (which drops a RELEASE flag file
   # next to the logs). Cap the wait so a dead driver cannot block the
-  # test generations forever.
-  echo "waiting for driver RELEASE (cap 75 min)"
-  for i in $(seq 1 450); do
+  # test generations forever. (250 min: the gateway path to the VM is
+  # slow - ~2.4 MB/s - so a 14 GB preservation download can take
+  # ~100 min when it cannot resume a partial file.)
+  echo "waiting for driver RELEASE (cap 250 min)"
+  for i in $(seq 1 1500); do
     if [ -f "$PHASE/RELEASE" ]; then
       echo "RELEASE received after ~$((i * 10))s"
       break
