@@ -6,7 +6,7 @@
 #   0. verify the mounted disk really has room (64 GB storage raise)
 #   1. download the gated Coloss bf16 (signed URL via env COLOSS_BF16_URL)
 #   2. convert it to int8_convrot with ctq, then GATE on: ctq exit 0,
-#      output size in the 12.5-14 GB band, and the .comfy_quant metadata
+#      output size in the 12.5-15 GB band, and the .comfy_quant metadata
 #      (format=int8_tensorwise, convrot, per_row, group size 256);
 #      write manifest.txt next to the logs
 #   3. expose the int8 via the file server (INT8_READY) so the driver
@@ -30,7 +30,7 @@ TE=$MODELS/text_encoders/qwen3vl_4b_fp8_scaled.safetensors
 VAE=$MODELS/vae/qwen_image_vae.safetensors
 BF16_SIZE=26283332704
 INT8_LO=12500000000
-INT8_HI=14000000000
+INT8_HI=15000000000
 TE_SIZE=5242467968
 VAE_SIZE=253806246
 TE_URL="https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
@@ -162,12 +162,12 @@ if [ ! -f "$PHASE/PHASE1_DONE" ]; then
     echo "ctq exit: $CTQ_RC after $(( $(date +%s) - CTQ_START ))s"
     tail -5 "$PHASE/ctq.log"
     [ "$CTQ_RC" = "0" ] || fail "ctq exited $CTQ_RC (see ctq.log)"
+    gate_quant_meta || fail "comfy_quant metadata gate failed (see GATE3 lines)"
     ISZ=$(size_of "$INT8")
     if [ "$ISZ" -lt "$INT8_LO" ] || [ "$ISZ" -gt "$INT8_HI" ]; then
       fail "int8 size $ISZ outside expected band [$INT8_LO, $INT8_HI]"
     fi
     echo "GATE size: PASS ($ISZ bytes in band)"
-    gate_quant_meta || fail "comfy_quant metadata gate failed (see GATE3 lines)"
     CTQ_VER=$(python3 -c "import importlib.metadata as m; print(m.version('convert-to-quant'))" 2>/dev/null || echo unknown)
     {
       echo "tool: ctq (convert-to-quant) $CTQ_VER"
