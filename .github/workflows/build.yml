@@ -1,0 +1,121 @@
+name: Build Mokarate Krea Coloss image
+# Conversion+generation image for the Krea 2 Coloss Turbo verification on
+# SaladCloud: layers ctq (convert-to-quant) on the Kromoss runtime image.
+# The startup script downloads the gated Coloss bf16 at container start
+# (signed URL via env var), converts it to int8_convrot, fetches the
+# public TE/VAE, then execs comfyui-api. A plain docker build+push is
+# used; the Verify step asserts every layer is < 10 GB (GHCR limit) and
+# the total is < 35 GB (Salad limit) before the test tag is promoted to
+# :conv1.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-krea-coloss
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TARGET: ghcr.io/ththth-mokarate/mokarate-krea-coloss:conv1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@cf1e78c50ca91e757bab3edc229027eebfc07871
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Check disk space
+        run: |
+          set -euo pipefail
+          df -h .
+          available=$(df -PB1 . | awk 'NR==2 {print $4}')
+          if (( available < 40 * 1024 * 1024 * 1024 )); then
+            echo "::error::less than 40 GiB free disk, refusing to build"
+            exit 1
+          fi
+
+      - name: Install crane 0.22.1 (checksum-verified)
+        run: |
+          set -euo pipefail
+          VERSION=v0.22.1
+          ARCHIVE=go-containerregistry_Linux_x86_64.tar.gz
+          SHA256=0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+          URL="https://github.com/google/go-containerregistry/releases/download/${VERSION}"
+          cd /tmp
+          curl -fsSL --retry 3 -o "$ARCHIVE" "$URL/$ARCHIVE"
+          echo "$SHA256  $ARCHIVE" | sha256sum -c -
+          tar --no-same-owner -xzf "$ARCHIVE" -C /tmp crane
+          sudo install -m 755 /tmp/crane /usr/local/bin/crane
+          crane version
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        # crane reads the same ~/.docker/config.json written by docker login
+
+      - name: Build and push test tag
+        run: |
+          set -euo pipefail
+          echo "TEST_TAG=$TARGET-test-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          docker build -t "$TARGET-test-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" -f Dockerfile .
+          docker push "$TARGET-test-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker images "$TARGET-test-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+      - name: Verify test image
+        run: |
+          set -euo pipefail
+          crane config "$TEST_TAG" > target.json
+          crane manifest "$TEST_TAG" > manifest.json
+          python3 - <<'PY'
+          import json
+          target = json.load(open("target.json"))
+          manifest = json.load(open("manifest.json"))
+          assert target["architecture"] == "amd64" and target["os"] == "linux"
+          assert not target["config"].get("Entrypoint"), target["config"].get("Entrypoint")
+          assert target["config"].get("Cmd") == ["/app/startup.sh"], target["config"].get("Cmd")
+          layers = manifest["layers"]
+          total = sum(x["size"] for x in layers) + manifest["config"]["size"]
+          print(f"compressed image: {total/1e9:.2f} GB; largest layer: {max(x['size'] for x in layers)/1e9:.2f} GB; layers: {len(layers)}")
+          assert all(x["size"] < 10_000_000_000 for x in layers), "GHCR layer size limit exceeded"
+          assert total < 35_000_000_000, "Salad image size limit (35 GB compressed) exceeded"
+          print("manifest verified: Cmd (no Entrypoint), arch, size within limits")
+          PY
+          crane digest "$TEST_TAG"
+          # In-image checks (no GPU needed). The image CMD is the phase-1
+          # startup script, so every check overrides the entrypoint.
+          docker run --rm --entrypoint sh "$TEST_TAG" -c '
+            set -e
+            test -f /app/server.py
+            test -x /app/startup.sh
+            test -x /opt/ComfyUI/comfyui-api
+            grep -q "krea2_coloss_turbo_int8_convrot" /app/startup.sh
+          '
+          docker run --rm --entrypoint ctq "$TEST_TAG" --help > ctq_help.txt 2>&1 || true
+          grep -q -- "--krea2" ctq_help.txt || docker run --rm --entrypoint ctq "$TEST_TAG" -hf > ctq_help.txt 2>&1
+          grep -q -- "--krea2" ctq_help.txt
+          grep -q -- "--scaling_mode" ctq_help.txt
+          echo "ctq help verified (--krea2, --scaling_mode present)"
+          docker run --rm --entrypoint python3 "$TEST_TAG" -c "import torch, triton, safetensors; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+      - name: Promote test tag to conv1
+        run: |
+          set -euo pipefail
+          EXPECTED=$(crane digest "$TEST_TAG")
+          crane copy "$TEST_TAG" "$TARGET"
+          ACTUAL=$(crane digest "$TARGET")
+          test "$EXPECTED" = "$ACTUAL"
+          echo "promoted $TARGET @$ACTUAL"
+          echo "image: $TARGET @$ACTUAL" >> "$GITHUB_STEP_SUMMARY"
