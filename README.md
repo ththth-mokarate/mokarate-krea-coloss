@@ -20,5 +20,8 @@ Turbo) with an in-session BF16 -> INT8 ConvRot conversion.
      --device cuda`, deletes the BF16, then downloads the public
      `qwen3vl_4b_fp8_scaled` text encoder and `qwen_image_vae` from
      Comfy-Org/Krea-2.
-  3. Stops the file server and `exec`s `./comfyui-api` for the test
-     generations.
+  3. Exposes the converted file through the file server
+     (`INT8_READY size=...` in the log) and waits for the driver's
+     `GET /release` signal — the driver downloads and preserves the
+     int8 on the VM first — then stops the file server and `exec`s
+     `./comfyui-api` for the test generations.

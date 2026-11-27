@@ -96,15 +96,24 @@ jobs:
           crane digest "$TEST_TAG"
           # In-image checks (no GPU needed). The image CMD is the phase-1
           # startup script, so every check overrides the entrypoint.
+          # set -x so a failing check is identifiable from the log.
           docker run --rm --entrypoint sh "$TEST_TAG" -c '
-            set -e
+            set -x
             test -f /app/server.py
             test -x /app/startup.sh
             test -x /opt/ComfyUI/comfyui-api
+            test -x /usr/local/bin/ctq
             grep -q "krea2_coloss_turbo_int8_convrot" /app/startup.sh
+            grep -q "INT8_READY" /app/startup.sh
+            grep -q "RELEASE" /app/startup.sh
+            grep -q "/release" /app/server.py
+            ls -la /app
           '
           docker run --rm --entrypoint ctq "$TEST_TAG" --help > ctq_help.txt 2>&1 || true
+          echo "ctq --help captured: $(wc -l < ctq_help.txt) lines"
+          head -20 ctq_help.txt
           grep -q -- "--krea2" ctq_help.txt || docker run --rm --entrypoint ctq "$TEST_TAG" -hf > ctq_help.txt 2>&1
+          echo "ctq help file now: $(wc -l < ctq_help.txt) lines"
           grep -q -- "--krea2" ctq_help.txt
           grep -q -- "--scaling_mode" ctq_help.txt
           echo "ctq help verified (--krea2, --scaling_mode present)"

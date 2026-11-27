@@ -97,6 +97,10 @@ if [ ! -f "$PHASE/PHASE1_DONE" ]; then
   else
     echo "int8 already present ($(size_of "$INT8") bytes) - skipping download+convert"
   fi
+  # Expose the converted file through the file server so the driver can
+  # download and preserve it off-container before this disk disappears.
+  ln -sf "$INT8" "$PHASE/krea2_coloss_turbo_int8_convrot.safetensors"
+  echo "INT8_READY size=$(size_of "$INT8")"
   rm -f "$BF16"
   echo "bf16 deleted; disk now:"
   df -h / | tail -1
@@ -104,6 +108,21 @@ if [ ! -f "$PHASE/PHASE1_DONE" ]; then
   download "$VAE_URL" "$VAE" "$VAE_SIZE" || fail "VAE download failed (rc=$?)"
   touch "$PHASE/PHASE1_DONE"
   echo "PHASE1_DONE $(date -u +%FT%TZ)"
+  # Hold the file server up until the driver has preserved the int8
+  # file and signals via GET /release (which drops a RELEASE flag file
+  # next to the logs). Cap the wait so a dead driver cannot block the
+  # test generations forever.
+  echo "waiting for driver RELEASE (cap 75 min)"
+  for i in $(seq 1 450); do
+    if [ -f "$PHASE/RELEASE" ]; then
+      echo "RELEASE received after ~$((i * 10))s"
+      break
+    fi
+    sleep 10
+  done
+  if [ ! -f "$PHASE/RELEASE" ]; then
+    echo "RELEASE wait cap reached - proceeding without it"
+  fi
 fi
 
 echo "handing port 3000 to comfyui-api"
