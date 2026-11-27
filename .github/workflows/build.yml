@@ -98,7 +98,7 @@ jobs:
           # startup script, so every check overrides the entrypoint.
           # set -x so a failing check is identifiable from the log.
           docker run --rm --entrypoint sh "$TEST_TAG" -c '
-            set -x
+            set -ex
             test -f /app/server.py
             test -x /app/startup.sh
             test -x /opt/ComfyUI/comfyui-api
@@ -110,14 +110,31 @@ jobs:
             ls -la /app
           '
           docker run --rm --entrypoint ctq "$TEST_TAG" --help > ctq_help.txt 2>&1 || true
-          echo "ctq --help captured: $(wc -l < ctq_help.txt) lines"
-          head -20 ctq_help.txt
-          grep -q -- "--krea2" ctq_help.txt || docker run --rm --entrypoint ctq "$TEST_TAG" -hf > ctq_help.txt 2>&1
-          echo "ctq help file now: $(wc -l < ctq_help.txt) lines"
+          docker run --rm --entrypoint ctq "$TEST_TAG" --help-filters >> ctq_help.txt 2>&1 || true
+          docker run --rm --entrypoint ctq "$TEST_TAG" --help-experimental >> ctq_help.txt 2>&1 || true
+          echo "ctq combined help (--help + --help-filters + --help-experimental): $(wc -l < ctq_help.txt) lines"
           grep -q -- "--krea2" ctq_help.txt
           grep -q -- "--scaling_mode" ctq_help.txt
-          echo "ctq help verified (--krea2, --scaling_mode present)"
+          grep -q -- "--convrot" ctq_help.txt
+          grep -q -- "--int8" ctq_help.txt
+          echo "ctq help verified (--krea2, --scaling_mode, --convrot, --int8 present)"
           docker run --rm --entrypoint python3 "$TEST_TAG" -c "import torch, triton, safetensors; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+          # Versions + the comfy-kitchen gate: stock UNETLoader needs
+          # comfy-kitchen kernels to execute int8_convrot weights. If it
+          # is missing/unimportable in the runtime base, FAIL THE BUILD
+          # here (pre-flight) instead of discovering it in the paid run.
+          docker run --rm --entrypoint python3 "$TEST_TAG" -c "
+          import importlib.metadata as m
+          print('convert-to-quant', m.version('convert-to-quant'))
+          import comfy_kitchen
+          print('comfy_kitchen import OK, version:', getattr(comfy_kitchen, '__version__', None) or m.version('comfy-kitchen'))
+          "
+          echo "comfy_kitchen verified"
+          # Krea 2 support probe (informational): CLIPType should know krea2.
+          docker run --rm --entrypoint python3 "$TEST_TAG" -c "
+          import comfy.sd
+          print('CLIPType has KREA2:', 'KREA2' in [x.name for x in comfy.sd.CLIPType])
+          " || echo "WARNING: comfy.sd CLIPType probe failed (non-fatal)"
 
       - name: Promote test tag to conv1
         run: |
